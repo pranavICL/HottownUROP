@@ -1,22 +1,31 @@
-c = 1.005 #(kJ/(kg⋅C))
-Req = 4 #found on google [(m2.K)/W]
+c = 1005 #(J/(kg⋅C))
+Req_W = (0.030*2*3.625)+(0.88*2) # 2 layers of bricks plus 1 layer of 2in insulation
+Req_C = 0.1875*0.44 + 0.88*2 #asphalt roof plus 2in insulation
+Req_F = 0.12*0.5  #1/2in hardwood floor 
 width = 4 #m
 length = 5 #m
 height = 2.5 #m
 rho = 1.222 #kg/m3
 Mair = width*length*height*rho #kg 
 wall_area = height*length*2 + height*width*2 #m2
-heat_watts = 4224 #W
+celing_area = width*length
+heat_watts = 1026*2#W
 seconds_in_a_day = 86400
 interval_duration = 600
 intervals = seconds_in_a_day/interval_duration
 thermal_energy_usage = 0 #initial
 heat_lost =0
 heat_gain =0
-#test
-#water heaters to get gas money
-#efficiency?
-#cost of gas (variable)
+boiler_heat = 24000 #w
+boiler_efficiency = 0.9
+boiler_radiator = boiler_efficiency*boiler_heat #watts boiler to radiator
+price_gas_KWh = 7.37 #pence
+heater = 0
+
+#cost for 88 seconds of radator at 24000  watt hours of gas
+#88 seconds = 586.6 watts hours
+#costs 4.32p
+ 
 
 #joules used by radiators for day
 def thermal(heater,temp,outside_temp,interval_duration,wall_area):
@@ -27,22 +36,29 @@ def thermal(heater,temp,outside_temp,interval_duration,wall_area):
         heater = 0
     # calculate energy in/out
     
-    heat_lost = ((temp - outside_temp) / Req ) * interval_duration * wall_area # joules
+    heat_lost = (( ((temp - outside_temp)*interval_duration*wall_area) / Req_W ) +  (((temp - outside_temp)*interval_duration*celing_area) / Req_C ))+ (((temp - outside_temp)*interval_duration*celing_area) / Req_F ) # walls
     print("heat lost = " ,heat_lost)
     if (heater == 1) :
-        heat_gain = heat_watts * interval_duration #joules 
+        heat_gain = heat_watts*interval_duration #joules 
     else:
         heat_gain = 0
     print("heat_gain = " , heat_gain)
+    print("Mair = " , Mair)
     # calculate new temp
-    change_in_temp = ( ( 1/(Mair*c) ) * (heat_gain - heat_lost) ) #cels
+    change_in_temp = ( (heat_gain - heat_lost)/(Mair*c) ) #cels
     temp = temp + change_in_temp #cels
     print("temp change = " , change_in_temp)
     print("new temp = " , temp)
     return temp , heater
             
 
-a = thermal(0,17,12,interval_duration,wall_area)
+#a = thermal(heater,temp[i],outside_temp[i],interval_duration,wall_area)
+thermal(0,17,12,interval_duration,wall_area)
+Total_day_watts = heat_watts * heater_counter
+boiler_time = (Total_day_watts * interval_duration)/boiler_radiator
+hours = boiler_time/3600
+kwhours = hours*24000
+cost = kwhours*price_gas_KWh
 
     
 
