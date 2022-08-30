@@ -1,0 +1,237 @@
+from machine import Pin, I2C, ADC, PWM
+from struct import unpack
+from time import sleep
+import utime
+import math
+from pimoroni import Button
+from picographics import PicoGraphics, DISPLAY_PICO_DISPLAY, PEN_P4
+
+
+adc = ADC(Pin(27))
+pwm = PWM(Pin(9))
+pwm.freq(100000)
+ina_i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=100000) 
+display = PicoGraphics(display=DISPLAY_PICO_DISPLAY, pen_type=PEN_P4, rotate=180)
+display.set_backlight(0.5)
+display.set_font("bitmap8")
+WHITE = display.create_pen(255, 255, 255)
+BLACK = display.create_pen(0, 0, 0)
+YELLOW = display.create_pen(255, 255, 0)
+button_a = Button(12)
+button_x = Button(14)
+global SHUNT_OHMS
+SHUNT_OHMS = 0.12
+state = 0
+RFUDGE = 0.14 #not meant to be here (inside resistance of ina)
+
+
+def saturate(duty):
+    if duty > 90:
+        duty = 90
+    if duty < 5:
+        duty = 5
+    return duty
+    
+def clear():
+    display.set_pen(BLACK)
+    display.clear()
+    display.update()
+    
+class ina219:
+    REG_CONFIG = 0x00
+    REG_SHUNTVOLTAGE = 0x01
+    REG_BUSVOLTAGE = 0x02
+    REG_POWER = 0x03
+    REG_CURRENT = 0x04
+    REG_CALIBRATION = 0x05
+    
+    def __init__(self,sr, address, maxi):
+        self.address = address
+        self.shunt = sr
+            
+    def vshunt(icur):
+        # Read Shunt register 1, 2 bytes
+        reg_bytes = ina_i2c.readfrom_mem(icur.address, icur.REG_SHUNTVOLTAGE, 2)
+        reg_value = int.from_bytes(reg_bytes, 'big')
+        if reg_value > 2**15: #negative
+            sign = -1
+            for i in range(16): 
+                reg_value = (reg_value ^ (1 << i))
+        else:
+            sign = 1
+        return (float(reg_value) * 1e-5 * sign)
+        
+    def vbus(ivolt):
+        # Read Vbus voltage
+        reg_bytes = ina_i2c.readfrom_mem(ivolt.address, ivolt.REG_BUSVOLTAGE, 2)
+        reg_value = int.from_bytes(reg_bytes, 'big') >> 3
+        return float(reg_value) * 0.004
+        
+    def configure(conf):
+        #ina_i2c.writeto_mem(conf.address, conf.REG_CONFIG, b'\x01\x9F') # PG = 1
+        ina_i2c.writeto_mem(conf.address, conf.REG_CONFIG, b'\x09\x9F') # PG = /2
+        ina_i2c.writeto_mem(conf.address, conf.REG_CALIBRATION, b'\x00\x00')
+        
+while True:
+    if state == 0:
+        
+        print("setup")
+        sleep(1)
+        ina = ina219(SHUNT_OHMS, 68, 5)
+        ina.configure()
+        ina2 = ina219(SHUNT_OHMS, 64, 5)
+        ina2.configure()
+        happy_state = 1
+        duty_state = 2
+        mppt_state = 3
+        next_state = happy_state
+        #count = 0
+        clear()
+
+    elif state == happy_state:
+        print("happy")
+        display.set_pen(YELLOW)
+        display.text(":) lol", 10, 10, 240, 4)
+        display.update()
+        duty = adc.read_u16()
+        dutyval = (duty * (100 / 65535)) #postive
+        pwm.duty_u16(duty)
+        v = ina.vbus()
+        i = 1000*(ina.vshunt())/SHUNT_OHMS
+        Pold = -v*i
+        Vold = v
+        
+        if button_a.read(): #mppt next
+            next_state = mppt_state
+            clear()
+            display.set_pen(WHITE)
+            display.text("I:", 10, 1, 240, 4)
+            display.text("O:", 10, 36, 240, 4)
+            display.text("DUTY:", 10, 71, 240, 4)
+            display.text("mppt mode", 10, 100, 240, 4)
+            display.update()
+        elif button_x.read(): #pot next
+            next_state = duty_state
+            clear()
+            display.set_pen(WHITE)
+            display.text("I:", 10, 1, 240, 4)
+            display.text("O:", 10, 36, 240, 4)
+            display.text("DUTY:", 10, 71, 240, 4)
+            display.text("pot mode", 10, 100, 240, 4)
+            display.update()
+        else:
+            next_state = happy_state
+            
+            
+    elif state == mppt_state:
+        
+        i = (ina.vshunt())/SHUNT_OHMS
+        v = ina.vbus() + RFUDGE*i
+        v2 = ina2.vbus()+ina2.vshunt()
+        i2 = -(ina2.vshunt())/SHUNT_OHMS
+        Pnew = v*i
+        imA = i*1000
+        i2mA = i2*1000
+        
+        
+        if Pold > Pnew :
+            if Vold > v :
+                dutyval = dutyval - 1
+                print("- <- dec")
+            else:
+                dutyval = dutyval + 1
+                print("- -> inc")
+        elif Pold == Pnew :
+            dutyval = dutyval
+        else:
+            if Vold > v :
+                dutyval = dutyval + 1
+                print("+ <- inc")
+            else:
+                dutyval = dutyval - 1
+                print("+ -> dec")
+
+        dutyval = saturate(dutyval)
+        
+                
+        duty = int(dutyval / (100/65535))
+        pwm.duty_u16(duty)
+        #negdutyval = 100- dutyval
+        #print(negdutyval)
+        display.set_clip(50,0,240,70)
+        clear()
+        display.set_pen(WHITE)
+        display.text("%.2f" % v, 50, 1, 240, 4)
+        display.text("%.0fmA" % imA, 140, 1, 240, 4)
+        display.text("%.2f" % v2, 50, 36, 240, 4)
+        display.text("%.0fmA" % i2mA, 140 , 36, 240, 4)
+        display.remove_clip()
+        
+        display.set_clip(120,71,120,29)
+        clear()
+        display.set_pen(WHITE)
+        display.text("%.0f " % dutyval, 120, 71, 240, 4)
+        display.remove_clip()
+        
+        display.update()
+        
+        dutyvalold = dutyval
+        Pold = Pnew
+        Vold = v
+        
+        if button_x.read():
+            next_state = duty_state
+            display.set_clip(0,100,240,36)
+            clear()
+            display.set_pen(WHITE)
+            display.text("pot mode", 10, 100, 240, 4)
+            display.remove_clip()
+            display.update()
+        else:
+            next_state = state
+           
+    elif state == duty_state:
+        
+        
+        i = (ina.vshunt())/SHUNT_OHMS
+        v = ina.vbus() + RFUDGE*i
+        v2 = ina2.vbus()+ina2.vshunt()
+        i2 = -(ina2.vshunt())/SHUNT_OHMS
+        duty = adc.read_u16()
+        pwm.duty_u16(65535 - duty) #is this correct?
+        dutyval = 100 - (duty * (100 / 65535))
+        imA = i*1000
+        i2mA = i2*1000
+        #pout = v2*i2mA
+        
+        
+        display.set_clip(50,0,240,70)
+        clear()
+        display.set_pen(WHITE)
+        display.text("%.2f" % v, 50, 1, 240, 4)
+        display.text("%.0fmA" % imA , 140, 1, 240, 4)
+        display.text("%.2f" % v2, 50, 36, 240, 4)
+        display.text("%.0fmA" % i2mA, 140 , 36, 240, 4)
+        display.remove_clip()
+        
+        display.set_clip(120,71,120,29)
+        clear()
+        display.set_pen(WHITE)
+        display.text("%.0f " % dutyval, 120, 71, 240, 4)
+        display.remove_clip()
+        
+        display.update()
+        
+        if button_a.read():
+            next_state = mppt_state
+            display.set_clip(0,107,240,36)
+            clear()
+            display.set_pen(WHITE)
+            display.text("mppt mode", 10, 100, 240, 4)
+            display.remove_clip()
+            display.update()
+        else:
+            next_state = state
+            
+    state = next_state
+    sleep(0.3)
