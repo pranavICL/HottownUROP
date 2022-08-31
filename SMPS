@@ -16,9 +16,12 @@ display.set_backlight(0.5)
 display.set_font("bitmap8")
 WHITE = display.create_pen(255, 255, 255)
 BLACK = display.create_pen(0, 0, 0)
-YELLOW = display.create_pen(255, 255, 0)
+MAGENTA = display.create_pen(255, 0, 255)
+GREEN = display.create_pen(0, 255, 0)
 button_a = Button(12)
+button_b = Button(13)
 button_x = Button(14)
+button_y = Button(15)
 global SHUNT_OHMS
 SHUNT_OHMS = 0.12
 state = 0
@@ -74,8 +77,6 @@ class ina219:
         
 while True:
     if state == 0:
-        
-        print("setup")
         sleep(1)
         ina = ina219(SHUNT_OHMS, 68, 5)
         ina.configure()
@@ -85,21 +86,28 @@ while True:
         duty_state = 2
         mppt_state = 3
         next_state = happy_state
-        #count = 0
         clear()
 
     elif state == happy_state:
-        print("happy")
-        display.set_pen(YELLOW)
-        display.text(":) lol", 10, 10, 240, 4)
+        display.set_pen(WHITE)
+        display.text("Choose", 60, 10, 240, 4)
+        display.text("State:", 65, 50, 240, 4)#fix to show options
+        display.set_pen(MAGENTA)
+        display.text("POT", 0, 90, 240, 4)
+        display.set_pen(GREEN)
+        display.text("MPPT", 150, 90, 240, 4)
         display.update()
         duty = adc.read_u16()
-        dutyval = (duty * (100 / 65535)) #postive
+        dutyval = (duty * (100 / 65535))
+        dutyvalold = dutyval
         pwm.duty_u16(duty)
         v = ina.vbus()
         i = 1000*(ina.vshunt())/SHUNT_OHMS
         Pold = -v*i
         Vold = v
+        hold = 0
+        inc = 0
+        int(inc)
         
         if button_a.read(): #mppt next
             next_state = mppt_state
@@ -108,7 +116,8 @@ while True:
             display.text("I:", 10, 1, 240, 4)
             display.text("O:", 10, 36, 240, 4)
             display.text("DUTY:", 10, 71, 240, 4)
-            display.text("mppt mode", 10, 100, 240, 4)
+            display.set_pen(GREEN)
+            display.text("MPPT STATE", 10, 105, 240, 4)
             display.update()
         elif button_x.read(): #pot next
             next_state = duty_state
@@ -117,14 +126,14 @@ while True:
             display.text("I:", 10, 1, 240, 4)
             display.text("O:", 10, 36, 240, 4)
             display.text("DUTY:", 10, 71, 240, 4)
-            display.text("pot mode", 10, 100, 240, 4)
+            display.set_pen(MAGENTA)
+            display.text("POT STATE", 10, 105, 240, 4)
             display.update()
         else:
             next_state = happy_state
             
             
     elif state == mppt_state:
-        
         i = (ina.vshunt())/SHUNT_OHMS
         v = ina.vbus() + RFUDGE*i
         v2 = ina2.vbus()+ina2.vshunt()
@@ -132,45 +141,44 @@ while True:
         Pnew = v*i
         imA = i*1000
         i2mA = i2*1000
-        
-        
-        if Pold > Pnew :
-            if Vold > v :
-                dutyval = dutyval - 1
-                print("- <- dec")
-            else:
-                dutyval = dutyval + 1
-                print("- -> inc")
-        elif Pold == Pnew :
-            dutyval = dutyval
-        else:
-            if Vold > v :
-                dutyval = dutyval + 1
-                print("+ <- inc")
-            else:
-                dutyval = dutyval - 1
-                print("+ -> dec")
+        if button_y.read():
+            dutyval = dutyval + 1
+            hold = 1
+        elif button_b.read():
+            dutyval = dutyval - 1
+            hold = 1
+        elif button_a.read() or hold == 0:
+            hold = 0
+            if Pold > Pnew :
+                if inc == 0:
+                    dutyval = dutyval + 1
+                    inc = inc + 1
+                elif inc == 1:
+                    dutyval = dutyval - 1
+                    inc = inc - 1
 
-        dutyval = saturate(dutyval)
-        
+            elif Pold < Pnew :
+                if inc == 0:
+                    dutyval = dutyval - 1
+                elif inc == 1:
+                    dutyval = dutyval + 1 
                 
-        duty = int(dutyval / (100/65535))
+        dutyval = saturate(dutyval)    
+        duty = int(dutyval * (65535 / 100))
         pwm.duty_u16(duty)
-        #negdutyval = 100- dutyval
-        #print(negdutyval)
         display.set_clip(50,0,240,70)
         clear()
         display.set_pen(WHITE)
-        display.text("%.2f" % v, 50, 1, 240, 4)
-        display.text("%.0fmA" % imA, 140, 1, 240, 4)
-        display.text("%.2f" % v2, 50, 36, 240, 4)
-        display.text("%.0fmA" % i2mA, 140 , 36, 240, 4)
+        display.text("%.2fV" % v, 50, 1, 240, 4)
+        display.text("%.0fmA" % imA, 150, 1, 240, 4)
+        display.text("%.2fV" % v2, 50, 36, 240, 4)
+        display.text("%.0fmA" % i2mA, 150 , 36, 240, 4)
         display.remove_clip()
         
         display.set_clip(120,71,120,29)
         clear()
         display.set_pen(WHITE)
-        display.text("%.0f " % dutyval, 120, 71, 240, 4)
+        display.text("%.0f" % dutyval, 120, 71, 240, 4)
         display.remove_clip()
         
         display.update()
@@ -181,57 +189,58 @@ while True:
         
         if button_x.read():
             next_state = duty_state
-            display.set_clip(0,100,240,36)
+            display.set_clip(0,105,240,36)
             clear()
-            display.set_pen(WHITE)
-            display.text("pot mode", 10, 100, 240, 4)
+            display.set_pen(MAGENTA)
+            display.text("POT STATE", 10, 105, 240, 4)
             display.remove_clip()
             display.update()
         else:
             next_state = state
            
-    elif state == duty_state:
-        
+    elif state == duty_state: #completed it
         
         i = (ina.vshunt())/SHUNT_OHMS
         v = ina.vbus() + RFUDGE*i
         v2 = ina2.vbus()+ina2.vshunt()
         i2 = -(ina2.vshunt())/SHUNT_OHMS
         duty = adc.read_u16()
-        pwm.duty_u16(65535 - duty) #is this correct?
-        dutyval = 100 - (duty * (100 / 65535))
+        pwm.duty_u16(duty) 
+        dutyval = (duty * (100 / 65535))
         imA = i*1000
         i2mA = i2*1000
-        #pout = v2*i2mA
-        
         
         display.set_clip(50,0,240,70)
         clear()
         display.set_pen(WHITE)
-        display.text("%.2f" % v, 50, 1, 240, 4)
-        display.text("%.0fmA" % imA , 140, 1, 240, 4)
-        display.text("%.2f" % v2, 50, 36, 240, 4)
-        display.text("%.0fmA" % i2mA, 140 , 36, 240, 4)
+        display.text("%.2fV" % v, 50, 1, 240, 4)
+        display.text("%.0fmA" % imA , 150, 1, 240, 4)
+        display.text("%.2fV" % v2, 50, 36, 240, 4)
+        display.text("%.0fmA" % i2mA, 150 , 36, 240, 4)
         display.remove_clip()
-        
+         
         display.set_clip(120,71,120,29)
         clear()
         display.set_pen(WHITE)
-        display.text("%.0f " % dutyval, 120, 71, 240, 4)
+        display.text("%.0f" % dutyval, 120, 71, 240, 4)
         display.remove_clip()
         
         display.update()
         
         if button_a.read():
             next_state = mppt_state
-            display.set_clip(0,107,240,36)
+            display.set_clip(0,105,240,36)
             clear()
-            display.set_pen(WHITE)
-            display.text("mppt mode", 10, 100, 240, 4)
+            display.set_pen(GREEN)
+            display.text("MPPT STATE", 10, 105, 240, 4)
             display.remove_clip()
             display.update()
         else:
             next_state = state
             
     state = next_state
-    sleep(0.3)
+    sleep(0.1)
+        
+
+ 
+
