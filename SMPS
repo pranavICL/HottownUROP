@@ -11,7 +11,7 @@ adc = ADC(Pin(27))
 pwm = PWM(Pin(9))
 pwm.freq(100000)
 ina_i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=100000) 
-display = PicoGraphics(display=DISPLAY_PICO_DISPLAY, pen_type=PEN_P4, rotate=180)
+display = PicoGraphics(display=DISPLAY_PICO_DISPLAY, pen_type=PEN_P4, rotate=0)
 display.set_backlight(0.5)
 display.set_font("bitmap8")
 WHITE = display.create_pen(255, 255, 255)
@@ -40,7 +40,7 @@ def clear():
     display.clear()
     display.update()
     
-class ina219:
+class ina219: 
     REG_CONFIG = 0x00
     REG_SHUNTVOLTAGE = 0x01
     REG_BUSVOLTAGE = 0x02
@@ -77,6 +77,8 @@ class ina219:
         
 while True:
     if state == 0:
+        
+        print("setup")
         sleep(1)
         ina = ina219(SHUNT_OHMS, 68, 5)
         ina.configure()
@@ -89,6 +91,7 @@ while True:
         clear()
 
     elif state == happy_state:
+        print("happy")
         display.set_pen(WHITE)
         display.text("Choose", 60, 10, 240, 4)
         display.text("State:", 65, 50, 240, 4)#fix to show options
@@ -99,100 +102,109 @@ while True:
         display.update()
         duty = adc.read_u16()
         dutyval = (duty * (100 / 65535))
-        dutyvalold = dutyval
         pwm.duty_u16(duty)
         v = ina.vbus()
         i = 1000*(ina.vshunt())/SHUNT_OHMS
         Pold = -v*i
-        Vold = v
-        hold = 0
+        auto = 1
+        once = 0
         inc = 0
         int(inc)
         
-        if button_a.read(): #mppt next
+        if button_y.read(): #mppt next
             next_state = mppt_state
             clear()
             display.set_pen(WHITE)
-            display.text("I:", 10, 1, 240, 4)
-            display.text("O:", 10, 36, 240, 4)
+            display.text("A:", 10, 1, 240, 4)
+            display.text("B:", 10, 36, 240, 4)
             display.text("DUTY:", 10, 71, 240, 4)
             display.set_pen(GREEN)
-            display.text("MPPT STATE", 10, 105, 240, 4)
+            display.text("MPPT AUTO", 10, 105, 240, 4)
             display.update()
-        elif button_x.read(): #pot next
+        elif button_b.read(): #pot next
             next_state = duty_state
             clear()
             display.set_pen(WHITE)
-            display.text("I:", 10, 1, 240, 4)
-            display.text("O:", 10, 36, 240, 4)
+            display.text("A:", 10, 1, 240, 4)
+            display.text("B:", 10, 36, 240, 4)
             display.text("DUTY:", 10, 71, 240, 4)
             display.set_pen(MAGENTA)
-            display.text("POT STATE", 10, 105, 240, 4)
+            display.text("MANUAL STATE", 10, 105, 240, 4)
             display.update()
         else:
             next_state = happy_state
             
             
     elif state == mppt_state:
+    
+        if button_x.read(): #increment mppt state
+            auto = 0
+            once = 1
+            dutyval = 5
+            display.set_clip(0,105,240,36)
+            clear()
+            display.set_pen(GREEN)
+            display.text("MPPT TRIG", 10, 105, 240, 4)
+            display.remove_clip()
+            
+        if button_y.read(): # auto mppt state
+            auto = 1
+            once = 0
+            display.set_clip(0,105,240,36)
+            clear()
+            display.set_pen(GREEN)
+            display.text("MPPT AUTO", 10, 105, 240, 4)
+            display.remove_clip()
+            
         i = (ina.vshunt())/SHUNT_OHMS
         v = ina.vbus() + RFUDGE*i
         v2 = ina2.vbus()+ina2.vshunt()
         i2 = -(ina2.vshunt())/SHUNT_OHMS
-        Pnew = v*i
         imA = i*1000
         i2mA = i2*1000
-        if button_y.read():
-            dutyval = dutyval + 1
-            hold = 1
-        elif button_b.read():
-            dutyval = dutyval - 1
-            hold = 1
-        elif button_a.read() or hold == 0:
-            hold = 0
-            if Pold > Pnew :
-                if inc == 0:
-                    dutyval = dutyval + 1
-                    inc = inc + 1
-                elif inc == 1:
-                    dutyval = dutyval - 1
-                    inc = inc - 1
-
-            elif Pold < Pnew :
-                if inc == 0:
-                    dutyval = dutyval - 1
-                elif inc == 1:
-                    dutyval = dutyval + 1 
-                
-        dutyval = saturate(dutyval)    
-        duty = int(dutyval * (65535 / 100))
-        pwm.duty_u16(duty)
+        PnewmW = v*imA
         display.set_clip(50,0,240,70)
         clear()
         display.set_pen(WHITE)
         display.text("%.2fV" % v, 50, 1, 240, 4)
-        display.text("%.0fmA" % imA, 150, 1, 240, 4)
-        display.text("%.2fV" % v2, 50, 36, 240, 4)
-        display.text("%.0fmA" % i2mA, 150 , 36, 240, 4)
+        display.text("%.0fmW" % PnewmW, 50, 36, 240, 4)
         display.remove_clip()
+             
+        if auto == 1 or once == 1:
+            if PnewmW < 10:
+                dutyval = dutyval - 5
+            else:
+                if Pold > PnewmW+2 :
+                    if inc == 0:
+                        dutyval = dutyval + 1
+                        inc = inc + 1
+                    elif inc == 1:
+                        dutyval = dutyval - 1
+                        inc = inc - 1
+                elif Pold < PnewmW-2:
+                    if inc == 0:
+                        dutyval = dutyval - 1
+                    elif inc == 1:
+                        dutyval = dutyval + 1      
+            dutyval = saturate(dutyval)    
+            duty = int(dutyval * (65535 / 100))
+            pwm.duty_u16(duty)
+            display.set_clip(120,71,120,29)
+            clear()
+            display.set_pen(WHITE)
+            display.text("%.0f" % dutyval, 120, 71, 240, 4)
+            display.remove_clip()
+            once = 0
         
-        display.set_clip(120,71,120,29)
-        clear()
-        display.set_pen(WHITE)
-        display.text("%.0f" % dutyval, 120, 71, 240, 4)
-        display.remove_clip()
         
+        Pold = PnewmW        
         display.update()
-        
-        dutyvalold = dutyval
-        Pold = Pnew
-        Vold = v
-        
-        if button_x.read():
+        if button_b.read():
             next_state = duty_state
             display.set_clip(0,105,240,36)
             clear()
             display.set_pen(MAGENTA)
-            display.text("POT STATE", 10, 105, 240, 4)
+            display.text("MANUAL STATE", 10, 105, 240, 4)
             display.remove_clip()
             display.update()
         else:
@@ -227,20 +239,19 @@ while True:
         
         display.update()
         
-        if button_a.read():
+        if button_y.read():
             next_state = mppt_state
             display.set_clip(0,105,240,36)
             clear()
             display.set_pen(GREEN)
-            display.text("MPPT STATE", 10, 105, 240, 4)
+            display.text("MPPT AUTO", 10, 105, 240, 4)
             display.remove_clip()
             display.update()
-        else:
+        else:how do
             next_state = state
             
     state = next_state
     sleep(0.1)
-        
 
  
 
